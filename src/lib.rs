@@ -63,7 +63,7 @@ use std::{
 pub use crate::native::HandshakeError;
 pub use crate::protocol::{CloseCode, Message};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use reqwest::{Client, ClientBuilder, IntoUrl, RequestBuilder};
+use reqwest::{Client, ClientBuilder, IntoUrl, Request, RequestBuilder, Response, Version};
 
 /// Errors returned by `reqwest_websocket`.
 #[derive(Debug, thiserror::Error)]
@@ -161,6 +161,16 @@ impl UpgradedRequestBuilder {
         self
     }
 
+    pub fn build_split(self) -> (Client, Result<UpgradeRequest, Error>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let (client, inner) = native::build_split(self.inner, &self.protocols);
+
+        #[cfg(target_arch = "wasm32")]
+        let (client, inner) = unimplemented!("wasm32 is not supported");
+
+        (client, inner.map(|inner| UpgradeRequest { inner, protocols: self.protocols }))
+    }
+
     /// Sends the request and returns an [`UpgradeResponse`].
     pub async fn send(self) -> Result<UpgradeResponse, Error> {
         #[cfg(not(target_arch = "wasm32"))]
@@ -173,6 +183,25 @@ impl UpgradedRequestBuilder {
             inner,
             protocols: self.protocols,
         })
+    }
+}
+
+pub struct UpgradeRequest {
+    #[cfg(not(target_arch = "wasm32"))]
+    inner: native::WebSocketRequest,
+
+    #[cfg(target_arch = "wasm32")]
+    inner: (),
+
+    protocols: Vec<String>,
+}
+
+impl UpgradeRequest {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn into_parts(self) -> (Request, Version, Option<String>, Vec<String>) {
+        let Self { inner: native::WebSocketRequest { request, version, nonce }, protocols } = self;
+
+        (request, version, nonce, protocols)
     }
 }
 
@@ -201,6 +230,11 @@ impl std::ops::Deref for UpgradeResponse {
 }
 
 impl UpgradeResponse {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_parts(response: Response, version: Version, nonce: Option<String>, protocols: Vec<String>) -> Self {
+        Self { inner: native::WebSocketResponse { version, nonce, response }, protocols }
+    }
+
     /// Turns the response into a `WebSocket`.
     /// This checks if the `WebSocket` handshake was successful.
     pub async fn into_websocket(self) -> Result<WebSocket, Error> {

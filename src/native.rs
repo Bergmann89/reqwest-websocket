@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 
 use reqwest::{
-    header::{HeaderName, HeaderValue},
-    RequestBuilder, Response, StatusCode, Version,
+    header::{HeaderName, HeaderValue}, Client, Request, RequestBuilder, Response, StatusCode, Version
 };
 
 use crate::{
@@ -10,13 +9,41 @@ use crate::{
     Error,
 };
 
+pub fn build_split(
+    request_builder: RequestBuilder,
+    protocols: &[String]
+) -> (Client, Result<WebSocketRequest, Error>) {
+    let (client, result) = request_builder.build_split();
+
+    let result = result.map_err(Error::Reqwest).and_then(|request| {
+        let (request, version, nonce) = build_request(request, protocols)?;
+
+        Ok(WebSocketRequest {
+            request, version, nonce
+        })
+    });
+
+    (client, result)
+}
+
 pub async fn send_request(
     request_builder: RequestBuilder,
     protocols: &[String],
 ) -> Result<WebSocketResponse, Error> {
-    let (client, request_result) = request_builder.build_split();
-    let mut request = request_result?;
+    let (client, request) = request_builder.build_split();
+    let (request, version, nonce) = build_request(request?, protocols)?;
 
+    // execute request
+    let response = client.execute(request).await?;
+
+    Ok(WebSocketResponse {
+        response,
+        version,
+        nonce,
+    })
+}
+
+fn build_request(mut request: Request, protocols: &[String]) -> Result<(Request, Version, Option<String>), Error> {
     // change the scheme from wss? to https?
     let url = request.url_mut();
     match url.scheme() {
@@ -73,14 +100,7 @@ pub async fn send_request(
         }
     };
 
-    // execute request
-    let response = client.execute(request).await?;
-
-    Ok(WebSocketResponse {
-        response,
-        version,
-        nonce,
-    })
+    Ok((request, version, nonce))
 }
 
 pub type WebSocketStream =
@@ -113,6 +133,12 @@ pub enum HandshakeError {
 
     #[error("unexpected status code: {0}")]
     UnexpectedStatusCode(StatusCode),
+}
+
+pub struct WebSocketRequest {
+    pub request: Request,
+    pub version: Version,
+    pub nonce: Option<String>,
 }
 
 pub struct WebSocketResponse {
